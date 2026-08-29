@@ -1,0 +1,25 @@
+# 元データ（xlsx等）はリポジトリに含めない
+*.xlsx
+*.xls
+*.xlsm
+*.csv.bak
+
+# OS / エディタ生成ファイル
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# 一時ファイル・キャッシュ
+*.tmp
+*.bak
+__pycache__/
+*.pyc
+
+# 環境変数・認証情報ファイル（将来的に追加された場合の保険）
+.env
+.env.*
+*.pem
+*.key
+serviceAccountKey.json
+firebase-adminsdk*.json
