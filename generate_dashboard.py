@@ -96,7 +96,10 @@ def compute_window_stats(games):
 
 def extract(xlsx_path):
     df = pd.read_excel(xlsx_path, sheet_name="一覧", header=None)
-    raw_rows = df.iloc[5:].values.tolist()
+    # 一覧シートの想定列数(A~I の9列)に限定して読む。
+    # エクスポート経路によっては末尾に書式のみの空列が付与されることがあるため、
+    # 9列を超える分は無視する（データとしては使われていない）。
+    raw_rows = df.iloc[5:, 0:9].values.tolist()
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
 
     # 段位基準テーブル（どのシートでも共通のはずなので、"一覧"・"原本"以外の最初のシートから読む）
@@ -114,12 +117,35 @@ def extract(xlsx_path):
     players = []
     seen = set()
     warnings = []
+    indirect_fallback_count = 0
 
     for r in raw_rows:
         key, disp_name, hanamaru_no, rank, avg, lastavoid, top, games, pts = r
         if pd.isna(key) or str(key).strip() == '':
             continue
         key = str(key).strip()
+
+        # ---- INDIRECT数式キャッシュ切れフォールバック ----
+        # 「一覧」シートの表示名(B列)・審査段位(D列)はINDIRECT数式のため、
+        # ODS経由の変換などでキャッシュが失われると空欄(NaN)で返ってくることがある。
+        # その場合は個人タブ自身の C4(表示名)・C12(現状段位) から直接読み取って補完する。
+        # （INDIRECTが本来参照している先そのものを読むだけで、判定ロジック・基準値は変更しない）
+        used_fallback = False
+        if key in wb.sheetnames:
+            tab_ws = wb[key]
+            if pd.isna(disp_name) or str(disp_name).strip() == '':
+                c4 = tab_ws.cell(row=4, column=3).value
+                if c4 not in (None, ''):
+                    disp_name = c4
+                    used_fallback = True
+            if pd.isna(rank) or str(rank).strip() == '':
+                c12 = tab_ws.cell(row=12, column=3).value
+                if c12 not in (None, ''):
+                    rank = c12
+                    used_fallback = True
+        if used_fallback:
+            indirect_fallback_count += 1
+
         disp_name = None if pd.isna(disp_name) else str(disp_name).strip()
         name = disp_name if (disp_name and disp_name != "0") else key
 
@@ -181,6 +207,12 @@ def extract(xlsx_path):
             },
             "exam": exam,
         })
+
+    if indirect_fallback_count > 0:
+        warnings.insert(0,
+            f"[自動補完・要確認不要] {indirect_fallback_count}名分の表示名/審査段位をINDIRECT数式"
+            f"キャッシュ切れのため個人タブ(C4/C12)から直接補完しました。"
+        )
 
     return {"rank_order": RANK_ORDER, "rank_req": rank_req, "players": players}, warnings
 
