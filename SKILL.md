@@ -2,12 +2,15 @@
 name: raiseraise-mahjong-dashboard
 description: >
   「らいらいず」麻雀サークルの個人成績・段位進捗ダッシュボードに関するスキル。
-  次のような場面で使う: (1) ユーザーが xlsx の成績管理表を添付し「最新版作成」「最新に更新」
-  などと指示したとき、(2) Firebase連携版アプリ(index.html)の設定・データモデル・管理者機能に
-  ついて質問・修正依頼があったとき、(3) 半荘結果の入力や昇段判定ロジックについて聞かれたとき。
-  このプロジェクトは xlsx ベースの静的HTML生成 → Firebase連携のライブアプリへ移行する過渡期に
-  あるため、xlsx が添付されたら「まだExcel運用中か、Firebase移行済みか」を必ず確認してから
-  動くこと（詳細は下記「運用モードの判定」を参照）。
+  次のような場面で使う: (1) ユーザーが「最新版に更新して」「スプシ更新したから反映して」
+  「最新にして」など、Google Drive上のスプレッドシートを最新HTMLに反映する指示をしたとき、
+  (2) generate_dashboard.py・index.html・段位判定ロジックについて質問・修正依頼があったとき、
+  (3) GitHub/GitHub Pagesでの公開・デプロイに関する質問があったとき、
+  (4) GitHub Actionsによる自動更新ワークフローについて質問・修正依頼があったとき。
+  現在の運用は「Google Driveのスプレッドシート → generate_dashboard.pyで静的HTML生成 →
+  GitHubへcommit・push → GitHub Pagesで自動公開」の一本化された流れ（旧Firebase連携版は廃止済み）。
+  **2026-08-30: pushの主経路をGitHub Actionsに移行済み（下記「運用フロー」参照）。
+  Actionsが自動でcommit・pushまで行うため、通常はClaudeがPATを提示してもらう必要はない。**
 ---
 
 # らいらいず 個人成績・段位進捗ダッシュボード
@@ -29,46 +32,206 @@ description: >
 
 デザインは緑のフェルト卓・牌色のカード・三元牌モチーフ・Shippori Mincho見出し。
 
-## 運用モードの判定（★最初に必ず確認すること）
-このプロジェクトには **2つの運用モード** が存在する。xlsx が添付されたら、まずどちらのモードか
-確認・判断してから動くこと。
+## 運用フロー（★現行・2026-08-30にGitHub Actions化）
 
-### モードA：レガシー静的HTML運用（xlsxがまだ正）
-- xlsx が唯一のデータソース。添付されたxlsxを `scripts/generate_dashboard.py` に通して
-  静的HTMLを1枚出力するだけ。
-- トリガー: xlsx添付 ＋「最新版作成」「最新に更新」など
-- 手順:
-  ```bash
-  python3 scripts/generate_dashboard.py "<入力xlsxの絶対パス>" "/mnt/user-data/outputs/らいらいず_個人成績・段位進捗.html"
-  ```
-- コンソール出力の「確認事項」（審査ラベル不一致など）はそのままユーザーに報告する。
-- `present_files` でHTMLを提示する。
+このプロジェクトには **2つの更新経路** がある。どちらも最終的にやることは同じ
+（スプレッドシート取得→generate_dashboard.py実行→確認事項の判定→index.html反映→push）だが、
+「誰が」「いつ」トリガーするかが異なる。
 
-### モードB：Firebase連携運用（管理者画面から直接入力、xlsx卒業後）
-- データの正は Firestore（`players`コレクション、`games`コレクション）。
-- ユーザーが「Firebase移行が完了した」「もうxlsxは使わない」と明言している場合はこちら。
-- この状態で xlsx が添付されて「最新に更新」と言われたら、**古い運用に戻す指示なのか、
-  単なる勘違い・過去の癖なのかをまず確認する**こと。判断がつかない場合は必ず問い合わせる。
-- xlsxのデータをどうしても取り込みたい場合（例: 過去分の一括インポートし直し）は、
-  下記「seed_data.json 生成手順」でファイルを作り直し、Firestoreに既存メンバーがいない
-  ことを確認した上で管理者画面の「初回データ取込」機能を使う。
+### 経路①：GitHub Actionsによる自動更新（★標準・推奨）
 
-## ファイル構成
 ```
-raiseraise-mahjong-dashboard/
-├─ SKILL.md                          … このファイル
-├─ scripts/
-│  └─ generate_dashboard.py          … 【モードA】xlsx→静的HTML生成スクリプト
-└─ firebase-app/
-   ├─ index.html                     … 【モードB】閲覧+管理者アプリ本体
-   ├─ seed_data.json                 … 【モードB】xlsxからの初回移行データ（都度作り直す）
-   └─ セットアップ手順.md              … Firebaseプロジェクト作成〜公開までの手順書
+① （任意）ユーザー: Google Driveのスプレッドシートを更新
+② トリガー: 以下のいずれか
+   - GitHubリポジトリの Actions タブから「Update Dashboard」を手動実行（Run workflow）
+   - 毎日 JST 6:00 に自動実行（スケジュールトリガー。.github/workflows/update-dashboard.yml
+     のcron設定を参照。不要なら削除して構わない）
+③ Actions上で以下を自動実行:
+   a. scripts/fetch_sheet.py がサービスアカウント認証でスプレッドシートをxlsx取得
+      （直接エクスポートが失敗した場合はODS経由+LibreOffice変換に自動フォールバック）
+   b. generate_dashboard.py を実行してHTMLを生成
+   c. scripts/classify_and_apply.py が確認事項を分類:
+      - 「[自動補完・要確認不要]」のみ → ブロックしない
+      - 段位ラベル不一致・個人タブ欠落・人数の想定外増減(±2名超)・生成失敗など
+        → ブロックする（要確認）
+④-a 要確認なし: index.html を差し替えて **mainに直接commit・push**
+     （Actions自動付与の GITHUB_TOKEN を使用。人手でのPAT提示は不要）
+④-b 要確認あり: `auto-update-review` ブランチにpushし、確認事項を本文に載せた
+     **Pull Requestを自動作成**（mainには直接反映しない）。人間がPRを見てmergeするか判断する。
+⑤ GitHub Pagesが自動的に再ビルドし、数分で本番サイトに反映される（④-aの場合）
+```
+
+**この経路の利点**: pushの認証情報（GITHUB_TOKEN）はActions実行環境に自動注入されるため、
+Claudeや人間が毎回PATを用意する必要がない。要確認事項がある場合も、mainを汚さずPRとして
+可視化されるので安全。
+
+**Claudeがこの経路でできること**:
+- ワークフローの中身（fetch_sheet.py / classify_and_apply.py / update-dashboard.yml）の
+  説明・修正
+- ユーザーから「Actionsの実行結果を見てほしい」「PRの内容を確認して」と頼まれた場合、
+  GitHub上のPRやワークフローログの内容を踏まえて説明する（閲覧はユーザーにURLを辿って
+  もらうか、read権限のあるトークンを都度提示してもらう形になる。書き込みは不要）
+- Actionsが機能しない・エラーが出た場合のトラブルシューティング
+
+**Claudeがこの経路で通常やらないこと**:
+- Google Driveからのスプレッドシート取得（Actions側のサービスアカウントが行うため）
+- commit・push（Actions側のGITHUB_TOKENが行うため）
+
+### 経路②：Claudeによる手動更新（★経路①が使えない場合のフォールバック）
+
+Actionsのサービスアカウント設定がまだ済んでいない場合や、ユーザーがチャット上で
+即座に反映してほしい場合は、従来通りClaudeが直接作業することもできる。
+
+```
+① ユーザー: Google Driveのスプレッドシートを更新
+② ユーザー→Claude: 「最新版に更新して」「スプシ更新した」などのトリガーフレーズ
+③ Claude: Google Driveから最新の管理表を検索・取得（xlsx/Googleスプレッドシート
+   いずれの形式でも、同名のファイルを探す。複数候補があれば内容を見て実データが
+   入っている方を選ぶ。迷ったらユーザーに確認する）
+   - Googleスプレッドシート形式でファイルサイズが大きい場合、xlsx直接エクスポートが
+     失敗することがある。その場合はODS形式でのエクスポート→
+     `libreoffice --headless --convert-to xlsx` でのxlsx変換を代替手段として使う
+     （下記「INDIRECT数式キャッシュ切れフォールバック」とセットで機能する）。
+④ Claude: generate_dashboard.py を実行してHTMLを生成
+⑤ Claude: 「確認事項」の要否を判定する（判定基準は下記「承認が必要かどうかの判定」参照）
+⑥-a 確認事項が無い（または「要確認不要」系のみ）場合:
+   ユーザーの承認を待たずにそのまま index.html を差し替えてcommit・push まで実行し、
+   完了後に「何名分・どんな差分だったか」を事後報告する。
+⑥-b 確認事項がある場合:
+   承認を待たずに進めず、確認用HTMLを present_files で提示し、内容と確認事項を報告して
+   ユーザーの「OK」「進めて」等の返答を待ってからcommit・pushする。
+⑦ GitHub Pagesが自動的に再ビルドし、数分で本番サイトに反映される
+```
+
+この経路でpushする場合、Claudeの作業環境はセッションごとにリセットされ認証情報を
+保存できないため、**pushの都度ユーザーにPATの提示を求める**（下記「push時の認証について」
+を参照）。経路①が使えるようになった後も、緊急時や経路①の不具合時のバックアップとして
+維持する。
+
+**トリガーフレーズの例**（経路②を使う場合。これらが来たら上記フローを起動する。xlsxの
+添付は必須ではなく、Google Driveから探しに行く）:
+- 「最新版に更新して」
+- 「スプシ最新にした、反映して」
+- 「ダッシュボード更新して」
+- 「◯◯（ファイル名）を読み込んで更新して」
+
+### 承認が必要かどうかの判定（★両経路共通のロジック）
+`generate_dashboard.py` 実行後にコンソールへ出る「確認事項」を次のように仕分ける
+（経路①では `scripts/classify_and_apply.py` がこの判定をそのままコード化している）:
+
+- **要確認不要（ブロッキングしない）**:
+  - `[自動補完・要確認不要]` から始まるメッセージ（下記「INDIRECT数式キャッシュ切れフォール
+    バック」を参照。エクスポート経路の都合で毎回発生しうる想定内の自動補完のため）
+- **要確認（ブロッキングする＝経路①ならPR作成、経路②ならユーザーの承認を待つ）**:
+  - 段位ラベル不一致（例:「〇〇さんの最下段ペアのラベルと一覧の審査段位が食い違うため
+    新段位0半荘スタートとして計算しました」）
+  - 一覧に存在するのに個人タブが見つからないメンバー
+  - 前回コミット時点の人数から大きく増減している（新規追加1〜2名程度は通常運用の範囲、
+    それ以上の増減や急な減少は要確認）
+  - スクリプトがエラーで終了した、または生成物が明らかに壊れている（人数が0名など）
+  - その他、上記のどれにも当てはまらない予期しない確認事項
+
+要確認の項目が1件でもあれば、経路①ならmainに直接反映せずPRを作成する。経路②なら
+必ずユーザーの承認を待ってからcommit・pushする。
+
+## GitHub Actions自動更新のセットアップ（★経路①・初回のみ必要）
+
+経路①を使うには、リポジトリに以下を一度だけ設定する必要がある（ユーザー側の作業。
+Google Cloud Consoleへのアクセスが必要なため、Claudeが代行することはできない）。
+
+1. **Google Cloudでサービスアカウントを作る**
+   - https://console.cloud.google.com/ で適当なプロジェクトを用意（新規でも既存でも可）
+   - 「APIとサービス」→「ライブラリ」で **Google Drive API** を有効化
+   - 「IAMと管理」→「サービスアカウント」→「サービスアカウントを作成」
+   - 作成後、そのサービスアカウントの「鍵」タブ →「鍵を追加」→ JSON形式でダウンロード
+2. **対象のスプレッドシートをサービスアカウントに共有する**
+   - ダウンロードしたJSON鍵の中の `client_email`（例:
+     `xxxxx@yyyyy.iam.gserviceaccount.com`）をコピー
+   - 「らいらいず個人成績管理表」をGoogle Driveで開き、この`client_email`宛てに
+     **閲覧者(Viewer)** 権限で共有する
+3. **GitHubリポジトリにSecrets/Variablesを設定する**
+   - リポジトリの Settings → Secrets and variables → Actions
+   - **Secrets** タブ → 「New repository secret」
+     - Name: `GDRIVE_SA_JSON`
+     - Value: ダウンロードしたJSON鍵の中身をそのまま貼り付け
+   - **Variables** タブ → 「New repository variable」
+     - Name: `SPREADSHEET_ID`
+     - Value: `1a7NAfHncVUKWixY0hpiTU-xd7R7MTobprLbTeKWRdc0`
+       （スプレッドシートのURLの `/d/` と `/edit` の間の文字列。ファイルが差し替わったら
+       ここを更新する）
+4. **動作確認**
+   - リポジトリの Actions タブ →「Update Dashboard」→「Run workflow」で手動実行
+   - 実行ログで `fetch_sheet.py` がエクスポートに成功しているか、`classify_and_apply.py`
+     の判定結果（need_review）を確認する
+   - 要確認なしならmainに直接pushされ、GitHub Pagesに反映される
+   - 要確認ありなら `auto-update-review` ブランチにPRが作られるので、内容を見てmergeするか判断する
+5. スケジュール実行（毎日 JST 6:00）が不要な場合は、
+   `.github/workflows/update-dashboard.yml` の `schedule:` ブロックを削除してよい。
+
+セットアップ完了後は、経路②のPAT提示は基本的に不要になる。経路②はActionsが
+使えない場合の緊急フォールバックとして残す。
+
+## 運用モードについて（履歴・注記）
+過去に「Firebase連携版（管理者画面から直接半荘結果を入力し、Firestoreにリアルタイム反映する
+モード）」を検討・実装したことがあるが、**2026年8月時点でこの運用は不採用となり、
+スプレッドシート運用（xlsx→静的HTML生成）に一本化されている**。
+そのため以下は現行のGitHubリポジトリには含まれていない:
+- `seed_data.json`（Firestoreへの初回データ取込用）
+- `セットアッフ_手順.md`（Firebaseセットアップ手順書）
+- index.html内の管理者ログイン・Firestore接続コード一式
+
+今後もし「Firebaseに戻したい」「管理者画面から直接入力したい」という要望が来た場合は、
+過去のFirebase版コード（このスキルの過去のバージョン、または会話履歴）を参照して再構築が必要。
+ゼロからではなく、一度作った実装があることをユーザーに伝えてよい。
+
+## GitHubリポジトリ・デプロイ構成
+- リポジトリ: `https://github.com/kenkomjcrai2s-ops/rairise-dashboard`（**public**）
+- 作業ディレクトリ（経路②用）: `/home/claude/rairise-dashboard/`（このセッションでコンテナが
+  再作成された場合は無くなっているので、`git init` からの再セットアップが必要。手順は下記
+  「環境がリセットされていた場合」を参照）
+- ブランチ: `main`（Actionsの要確認ありPRは `auto-update-review` ブランチ）
+- GitHub Pages: 有効化済み。Source = `Deploy from a branch`, Branch = `main` / `/ (root)`
+  - 公開URL: `https://kenkomjcrai2s-ops.github.io/rairise-dashboard/`
+  - `main` に push すると自動で再ビルド・反映される（追加のデプロイ操作は不要）
+- リポジトリはpublicなので、**メンバーの実名/ニックネームと成績データはインターネット上に
+  公開されている**という前提を忘れないこと（新しく個人情報に類する項目を追加する提案をする
+  際は、このpublic性を踏まえて一言添える）
+- サービスアカウントのJSON鍵はGitHub Secretsにのみ保存し、リポジトリにコミットしない
+  （`.gitignore` で `serviceAccountKey.json` 等を除外済み）
+
+### push時の認証について（★経路②を使う場合のみ）
+- 経路①（GitHub Actions）が動いていれば、pushはActions内で完結しPATは不要。
+- 経路②でClaudeが直接pushする場合:
+  - Claudeはトークンやパスワードを勝手に作成・保存しない。push実行そのものは必ず
+    ユーザーにPATの提示を求める（PAT自体の入力を「承認」の代わりとする。ファイルには
+    保存しない、git remoteのURLにも埋め込まない＝
+    `git push https://<token>@github.com/...` の形でその場限りのコマンド引数として渡すのみ）
+  - 過去に発行されたPATは有効期限が切れている・失効されている可能性がある。push時に
+    エラーになったら、新しいPATの発行をユーザーに依頼する（発行手順: Fine-grained token,
+    Only select repositories → rairise-dashboard, Permissions → Contents: Read and write）
+  - 環境（コンテナ）がリセットされ `/home/claude/rairise-dashboard/` が無い場合は、
+    `git clone https://github.com/kenkomjcrai2s-ops/rairise-dashboard.git` から再取得できる
+    （publicリポジトリなので clone 自体は認証不要。push時のみ認証が要る）
+
+### 環境がリセットされていた場合の再セットアップ（経路②用）
+```bash
+cd /home/claude
+git clone https://github.com/kenkomjcrai2s-ops/rairise-dashboard.git
+cd rairise-dashboard
+git remote -v   # origin が設定されていることを確認
 ```
 
 ## xlsx の前提構造（★複数ペア対応版・現行仕様）
 - 「一覧」シート: 5行目がヘッダー、6行目以降がデータ。列構成:
   `名前キー(A) / 表示名(B) / はなまるNO(C) / 審査段位(D) / 平均着順(E) / ラス回避率(F) / トップ回数(G) / 実践回数(H) / ポイント(I)`
+  - B・D・E・F・G・H・I列は実際には個人タブへの`INDIRECT`数式（例: 表示名は
+    `=INDIRECT(キー&"!ｃ4")`、審査段位は `=INDIRECT(キー&"!ｃ12")`）。
+  - エクスポート経路によっては、この9列より後ろに書式のみの空列が付くことがある。
+    `generate_dashboard.py` は「一覧」シートの読み込み範囲をA〜Iの9列に固定しているため、
+    余分な列があっても影響しない。
 - 各メンバーの個人タブ（シート名 = 一覧のA列キーと一致）
+  - C4=表示名、C5=はなまるNO、C7=平均着順、C8=ラス回避率、C9=トップ回数、
+    C10=実践回数、C11=ポイント、C12=現状段位（一覧のINDIRECT数式が参照する先そのもの）
   - 各「審査ペア」は連続する2行で構成される（上=素点、下=着順）
   - 1組目: 4-5行目 / 2組目: 6-7行目 / 3組目: 8-9行目 / ... （2行ずつ増える、人によりペア数が異なる）
   - 各ペアの `F列`（列6）に段位ラベルがあることが多い（無い場合もある）
@@ -77,6 +240,29 @@ raiseraise-mahjong-dashboard/
     最初の個人タブから読み取る）
 - 「原本」シートは無視する。
 - 段位の並び（低→高）: `5級,4級,3級,2級,1級,初段,二段,三段,四段,五段,六段,七段,八段,九段`
+- Google Drive上には同じ内容が「Googleスプレッドシート形式」と「.xlsx形式」の両方で
+  見つかることがある。**Googleスプレッドシート形式はファイルサイズが大きいとエクスポート
+  APIが失敗することがある**ので、その場合は同名の.xlsxファイル（見た目のタイトルに
+  `.xlsx`が付いている方）を優先的にダウンロードして使う。同名.xlsxも見つからず
+  xlsx直接エクスポートも失敗する場合は、ODS形式でのエクスポート→
+  `libreoffice --headless --convert-to xlsx` でのxlsx変換を代替手段として使ってよい
+  （下記「INDIRECT数式キャッシュ切れフォールバック」とセットで機能する。経路①では
+  `scripts/fetch_sheet.py` がこれを自動で行う）。
+
+### INDIRECT数式キャッシュ切れフォールバック（★generate_dashboard.pyに実装済み）
+xlsxの直接エクスポートが失敗しODS等の代替経路を使った場合、「一覧」シートのB・D列
+（`INDIRECT`数式のセル）の計算結果がキャッシュされておらず、pandasで読むと**全員分
+空欄（NaN）** になって返ってくることがある。実際に2026-08-30の更新作業で発生した
+（53名全員分の表示名・審査段位が空欄になっていた）。
+
+`generate_dashboard.py` はこれを検知した場合、該当行の審査段位・表示名を
+個人タブ自身の `C12`（現状段位）・`C4`（表示名）セルから直接読み取って補完する
+（INDIRECT数式が本来参照している先と同じセルを直接読みに行くだけで、判定ロジックや
+基準値そのものは変更していない）。補完が発生した場合はコンソールに
+`[自動補完・要確認不要] N名分の表示名/審査段位をINDIRECT数式キャッシュ切れのため
+個人タブ(C4/C12)から直接補完しました。` という1行の集計メッセージを出す。このメッセージ
+単体は毎回の運用で普通に起こりうるものなので、これだけを理由に承認待ちにする必要はない
+（詳細は上記「承認が必要かどうかの判定」を参照）。
 
 ### 計算ルール（★ユーザー指定・最重要）
 - **累計成績**：当該タブ内の**全ペア**の全対局データを合算した集計
@@ -91,7 +277,7 @@ raiseraise-mahjong-dashboard/
   - 最下段ペアの段位ラベルが一覧と食い違う → その段位を突破して新段位に上がり、
     新段位ではまだ0半荘（"審査開始前" として扱い、確認事項として報告）
 
-### 昇段基準テーブル（変更されない限り固定値、両モードのコードにハードコード済み）
+### 昇段基準テーブル（変更されない限り固定値、generate_dashboard.pyにハードコード済み）
 
 | 段位 | 対象半荘数 | 平均着順基準(以内) | 平均収支基準(以上) |
 |---|---|---|---|
@@ -114,53 +300,73 @@ raiseraise-mahjong-dashboard/
 - 名前は表示名優先、空欄/`"0"`の場合はキー（個人タブ名）を代わりに使う。
 - ポイント（収支）の単位は「実績配列の生スコア差分」の合計。xlsx「一覧」シートの
   ポイント列（Mリーグ的スコア）とはスケールが異なるが、ダッシュボード上は
-  生スコア合計で一貫させる（`career.pointsSum`もこのスケール）。
+  生スコア合計で一貫させる。
 - 累計ラス回避率・累計平均着順・累計ポイントは、必ず全ペアの実データから再計算する
   （一覧シートの集計値をそのまま使わない。一覧の値はあくまで参考、正は個人タブ）。
 
-## Firestore データモデル（モードB）
+## ファイル構成（現行・GitHubリポジトリ）
 ```
-players/{playerKey}
-  name: string
-  rank: string                 // RANK_ORDER のいずれか
-  examWindow: [{score:number, place:1|2|3|4}, ...]   // 現在の審査ウィンドウ（最大 required_games 件）
-  career: {                    // 累計成績（半荘登録のたびに加算式で更新）
-    gamesCount: number, placeSum: number,
-    avoidCount: number, pointsSum: number, topCount: number
-  }
+rairise-dashboard/                     … https://github.com/kenkomjcrai2s-ops/rairise-dashboard
+├─ .gitignore                          … xlsx等の元データ・秘密情報・一時ファイルを除外
+├─ SKILL.md                            … このファイル
+├─ generate_dashboard.py               … xlsx→静的HTML生成スクリプト（INDIRECTフォールバック実装済み）
+├─ index.html                          … 生成された最新のダッシュボード本体（公開されるファイル）
+├─ scripts/
+│  ├─ fetch_sheet.py                   … Google Drive→xlsx取得（サービスアカウント認証、ODSフォールバック付き）
+│  └─ classify_and_apply.py            … generate_dashboard.py実行＋確認事項の分類（push可否判定）
+└─ .github/workflows/
+   └─ update-dashboard.yml             … 経路①（自動更新）のGitHub Actionsワークフロー定義
+```
 
-games/{autoId}
-  timestamp: serverTimestamp
-  entries: [
-    { playerKey, place, score, before: {rank, examWindow, career} }
-  ]
-```
-昇段/リセット判定ロジック（`index.html`内の半荘登録トランザクション、および
-`generate_dashboard.py`のPython版と同一ロジック）:
-1. 半荘登録のたびに該当4名の`examWindow`に1件追加
-2. `played_games >= required_games` になったら、
-   - 平均着順基準・平均収支基準の両方をクリア → 次の段位に昇段し、`examWindow`を空にリセット
-   - どちらかクリアしていない → 段位はそのまま、`examWindow`を空にリセット（再受験）
-3. `career`は常に加算式で更新（半荘数+1、着順合計+着順、ラス回避数+(ラスでなければ1)、
-   ポイント+得点、トップ回数+(トップなら1)）
+## 更新作業時のチェックリスト（経路②・手動更新の場合）
+1. Google Driveでスプレッドシートを検索・取得（見つからない/複数候補あるときはユーザーに確認）
+2. `generate_dashboard.py <入力xlsx> <出力html>` を実行
+3. コンソールの「確認事項」を「要確認不要」（`[自動補完・要確認不要]`のみ）と
+   「要確認」（それ以外）に仕分ける
+4. 人数が前回から大きくズレていないか（増減があれば理由を一言添える。1〜2名程度の
+   新規追加は通常運用の範囲として要確認扱いにしなくてよい）
+5. 「要確認」が無ければ、そのまま6〜8に進んでよい（事前提示は任意。少なくとも
+   push完了後に差分内容を報告する）。「要確認」が1件でもあれば、確認用HTMLを
+   `present_files` で提示し、ユーザーの承認を待ってから6に進む。
+6. `/home/claude/rairise-dashboard/index.html` を差し替えてcommit
+7. pushの認証方法をユーザーに確認（PATが必要。これは要確認の有無によらず毎回必要）
+8. push後、GitHub Pagesへの反映を軽く確認する（`https://api.github.com/repos/kenkomjcrai2s-ops/rairise-dashboard/pages`
+   をcurlで叩いて`"status": "built"`になっているか等。github.ioドメイン自体は
+   ネットワーク制限でClaudeから直接アクセスできない場合があるので、その場合は
+   ユーザーに目視確認をお願いする）
 
 ## 変更を頼まれた場合の扱い
 - 表示項目・文言・配色・シミュレーター仕様・昇段基準テーブルの値などに明確な変更依頼があった
-  場合のみ、該当ファイル（モードAなら`generate_dashboard.py`、モードBなら`index.html`）を編集する。
-  **両モードは基本的にロジック・デザインを同期させる**（片方だけ直して整合性が崩れないよう注意）。
-- 変更後は必ず動作確認する:
-  - モードA: スクリプトを実行し直し、エラーが出ないこと・人数が想定通り（51名前後）
-    であること、複数ペアを持つ主要メンバー（例：おたろ5ペア、ヨナ2ペア、どんちゃん4ペア）
-    の累計半荘数が一覧シートの実践回数列と一致することを確認
-  - モードB: `<script>...</script>`部分を抽出して `node --check` で構文チェックする
+  場合のみ `generate_dashboard.py` を編集する。
+- 変更後は必ず動作確認する: スクリプトを実行し直し、エラーが出ないこと・人数が想定通りで
+  あること、複数ペアを持つ主要メンバー（例：おたろ、ヨナ、どんちゃん等、複数ペアを持つ人）
+  の累計半荘数が一覧シートの実践回数列と一致することを確認。
 - xlsx側の構造がさらに変わって抽出が壊れた場合は、まず該当シートの構造を`view`で確認し、
   上記「前提構造」との差分をユーザーに説明した上で抽出ロジックを修正する。
+- `scripts/fetch_sheet.py` や `scripts/classify_and_apply.py`、
+  `.github/workflows/update-dashboard.yml` を変更した場合は、経路①（Actions）のテストは
+  ユーザー側でActionsタブから手動実行してもらい、ログを共有してもらう形でデバッグする
+  （Claudeの作業環境からはActionsの実行そのものはできないため）。
 
 ### 過去の重要な仕様変更履歴
 - **2026-07以前**: 個人タブは1ペア(4-5行目)のみを見る単純構造。「期間内 = row4-5、審査ラベル
   はF4」で判定していた。この時期はラベル不一致が発生することがあり、その場合は"新段位0半荘
   スタート"として扱っていた。
-- **2026-07以降（現行）**: 個人タブは複数ペア構造。1人につき複数の審査履歴が縦に積まれる。
+- **2026-07以降**: 個人タブは複数ペア構造。1人につき複数の審査履歴が縦に積まれる。
   「期間内 = 最下段のデータ入りペア、累計 = 全ペア合算」で判定するよう変更。旧仕様の
   スクリプトでは"期間内"として一番古いペア（=過去に失敗した審査）を表示してしまう
   バグがあったため、必ず新仕様（`extract_pairs`関数）を使うこと。
+- **2026-08**: GitHub（`kenkomjcrai2s-ops/rairise-dashboard`）+ GitHub Pagesでの公開に移行。
+  Firebase連携版（モードB）は不採用となり削除。運用はスプレッドシート→静的HTML生成に一本化。
+- **2026-08-30 (1)**: Google Drive上のスプレッドシートが巨大化しxlsx直接エクスポートが
+  失敗するケースに対応するため、ODS経由での取得＋`generate_dashboard.py`側のINDIRECT数式
+  キャッシュ切れフォールバックを実装（「一覧」シートの読み込み範囲をA〜9列に固定する修正も
+  同時に実施）。
+- **2026-08-30 (2)**: push前のユーザー承認フローを半自動化。「要確認」項目（段位ラベル
+  不一致・個人タブ欠落・想定外の人数増減など）が無ければ承認を待たずに即pushする運用に変更
+  （この時点ではpush自体の認証＝PAT提示は引き続き毎回必要だった）。
+- **2026-08-30 (3)**: pushの主経路をGitHub Actionsに移行。`scripts/fetch_sheet.py`
+  （サービスアカウント認証でのスプレッドシート取得）、`scripts/classify_and_apply.py`
+  （確認事項の分類とneed_review判定）、`.github/workflows/update-dashboard.yml`
+  （手動実行・毎日自動実行トリガー、要確認なしはmain直push、要確認ありはPR作成）を追加。
+  これによりpush時の人手PAT提示は原則不要になった（経路②はフォールバックとして維持）。

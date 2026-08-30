@@ -3,6 +3,11 @@
 *.xls
 *.xlsm
 *.csv.bak
+*.ods
+
+# Actionsワークフローの中間生成物
+index.new.html
+review_reasons.txt
 
 # OS / エディタ生成ファイル
 .DS_Store

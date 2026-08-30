@@ -1,0 +1,69 @@
+name: Update Dashboard
+
+on:
+  workflow_dispatch: {}
+  # 毎日 JST 6:00 (UTC 21:00) に自動実行。不要なら削除してよい。
+  schedule:
+    - cron: "0 21 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install --quiet google-api-python-client google-auth pandas openpyxl
+
+      - name: Install LibreOffice (ODSフォールバック用)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends libreoffice-calc
+
+      - name: Fetch spreadsheet from Google Drive
+        env:
+          GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
+          SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}
+        run: python3 scripts/fetch_sheet.py
+
+      - name: Generate dashboard & classify confirmation items
+        id: classify
+        run: python3 scripts/classify_and_apply.py
+
+      - name: Apply generated HTML
+        run: cp index.new.html index.html
+
+      - name: Commit & push directly (要確認なしの場合)
+        if: steps.classify.outputs.need_review == 'false'
+        run: |
+          git config user.name "raiseraise-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "差分なし。commitをスキップします。"
+          else
+            git commit -m "自動更新: スプレッドシートの最新データを反映"
+            git push
+          fi
+
+      - name: Create Pull Request for review (要確認ありの場合)
+        if: steps.classify.outputs.need_review == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "自動更新（要確認あり）: レビューをお願いします"
+          branch: auto-update-review
+          title: "ダッシュボード更新（要確認あり）"
+          body-path: review_reasons.txt
+          add-paths: |
+            index.html
