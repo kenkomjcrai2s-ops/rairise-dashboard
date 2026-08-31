@@ -1,3 +1,4 @@
+```yaml
 name: Update Dashboard
 
 on:
@@ -9,13 +10,22 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write
 
 jobs:
   update:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: project-253aa4a4-b139-490b-952
+          workload_identity_provider: projects/338165887779/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-dashboard@project-253aa4a4-b139-490b-952.iam.gserviceaccount.com
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,7 +43,6 @@ jobs:
 
       - name: Fetch spreadsheet from Google Drive
         env:
-          GDRIVE_SA_JSON: ${{ secrets.GDRIVE_SA_JSON }}
           SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }}
         run: python3 scripts/fetch_sheet.py
 
@@ -67,3 +76,4 @@ jobs:
           body-path: review_reasons.txt
           add-paths: |
             index.html
+```
