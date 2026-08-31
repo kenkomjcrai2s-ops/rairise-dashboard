@@ -1,9 +1,7 @@
-```yaml
 name: Update Dashboard
 
 on:
-  workflow_dispatch: {}
-  # 毎日 JST 6:00 (UTC 21:00) に自動実行。不要なら削除してよい。
+  workflow_dispatch:
   schedule:
     - cron: "0 21 * * *"
 
@@ -36,7 +34,7 @@ jobs:
         run: |
           pip install --quiet google-api-python-client google-auth pandas openpyxl
 
-      - name: Install LibreOffice (ODSフォールバック用)
+      - name: Install LibreOffice
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends libreoffice-calc
@@ -53,7 +51,7 @@ jobs:
       - name: Apply generated HTML
         run: cp index.new.html index.html
 
-      - name: Commit & push directly (要確認なしの場合)
+      - name: Commit & push directly
         if: steps.classify.outputs.need_review == 'false'
         run: |
           git config user.name "raiseraise-bot"
@@ -66,7 +64,7 @@ jobs:
             git push
           fi
 
-      - name: Create Pull Request for review (要確認ありの場合)
+      - name: Create Pull Request for review
         if: steps.classify.outputs.need_review == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
@@ -76,4 +74,3 @@ jobs:
           body-path: review_reasons.txt
           add-paths: |
             index.html
-```
